@@ -110,6 +110,30 @@ pub fn install(
     version: &str,
     asset: &Package,
 ) -> Result<PathBuf> {
+    install_mode(source, root, product, version, asset, false)
+}
+
+/// Existing installation only: Tauri NSIS /UPDATE preserves user data, startup
+/// preferences and shortcuts instead of performing the fresh-install flow.
+pub fn install_update(
+    source: &Path,
+    root: &Path,
+    product: &Product,
+    version: &str,
+    asset: &Package,
+) -> Result<PathBuf> {
+    install_mode(source, root, product, version, asset, true)
+}
+
+fn install_mode(
+    source: &Path,
+    root: &Path,
+    product: &Product,
+    version: &str,
+    asset: &Package,
+    update: bool,
+) -> Result<PathBuf> {
+    let _ = update;
     ensure!(valid_version(version), "Versão inválida");
     let app = owned_dir(root, &product.id, true)?;
     #[cfg(target_os = "linux")]
@@ -151,10 +175,12 @@ pub fn install(
         use std::os::windows::process::CommandExt;
         // NSIS requires /D to be the final, unquoted argument. No command shell is invoked.
         // Only fixed arguments and a locally selected directory reach this process.
-        let status = Command::new(source)
-            .arg("/S")
-            .arg("/CURRENTUSER")
-            .arg("/NORESTART")
+        let mut command = Command::new(source);
+        command.args(["/S", "/CURRENTUSER", "/NORESTART"]);
+        if update {
+            command.arg("/UPDATE");
+        }
+        let status = command
             .raw_arg(format!("/D={}", app.display()))
             .status()
             .context("Falha ao executar o instalador")?;

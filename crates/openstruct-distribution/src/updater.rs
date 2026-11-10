@@ -561,6 +561,24 @@ impl Updater {
         .context("Atualização não disponível")?;
         same_selection(&expected, &fresh)?;
         self.validate_installation()?;
+        let previous_digest = storage::digest(&self.installation.executable)?;
+        let margin = 16_000_000;
+        let helper_size = fs::metadata(std::env::current_exe()?)?.len();
+        ensure!(
+            fs2::available_space(&self.root)? > fresh.package.size + helper_size + margin,
+            "Não há espaço livre suficiente para baixar e preparar a atualização"
+        );
+        ensure!(
+            fs2::available_space(
+                self.installation
+                    .executable
+                    .parent()
+                    .context("Pasta inválida")?
+            )? > fresh.package.size.saturating_mul(3)
+                + fs::metadata(&self.installation.executable)?.len()
+                + margin,
+            "Não há espaço livre suficiente para instalar e preservar a versão atual"
+        );
         let dir = self.root.join(format!("stage-{}", uuid::Uuid::new_v4()));
         private_dir(&dir)?;
         storage::atomic_json(
@@ -609,7 +627,7 @@ impl Updater {
                 installation: self.installation.clone(),
                 envelope,
                 nonce: uuid::Uuid::new_v4().to_string(),
-                previous_digest: storage::digest(&self.installation.executable)?,
+                previous_digest,
             };
             storage::atomic_json(&dir.join("request.json"), &request)?;
             Ok::<_, anyhow::Error>(request)
@@ -724,6 +742,7 @@ impl Updater {
             storage::digest(&self.installation.executable)? == request.previous_digest,
             "A instalação foi alterada externamente; reinicie a verificação"
         );
+        confirm_product(&self.installation.executable, &self.running)?;
         let ready = dir.join("ready");
         storage::reject_symlink(&ready)?;
         if ready.exists() {
@@ -903,6 +922,50 @@ fn managed_item(disk: &DiskState, i: &Installation, running: &str) -> Result<Ins
     platform::checked_executable(item)?;
     Ok(item.clone())
 }
+fn install_managed(
+    data: &Path,
+    source: &Path,
+    request: &Request,
+    selection: &Selection,
+    catalog: &Catalog,
+) -> Result<(PathBuf, Option<String>)> {
+    let _guard = storage::acquire_lock(data)?;
+    let state_path = data.join("state.json");
+    let mut raw: serde_json::Value = limited_json(&state_path, 5_000_000)?;
+    let disk: DiskState = serde_json::from_value(raw.clone())?;
+    let old = managed_item(&disk, &request.installation, &request.previous_version)?;
+    ensure!(
+        !disk.jobs.iter().any(|j| crate::model::is_active(&j.phase)),
+        "O Launcher tem operações pendentes"
+    );
+    let exe = platform::install_update(
+        source,
+        Path::new(&old.root),
+        catalog.product(PRODUCT)?,
+        &request.version,
+        &selection.package,
+    )?;
+    confirm_product(&exe, &request.version)?;
+    let item = Installed {
+        app_id: PRODUCT.into(),
+        name: old.name.clone(),
+        version: request.version.clone(),
+        kind: selection.package.kind.clone(),
+        root: old.root.clone(),
+        executable: exe.to_string_lossy().into(),
+        executable_sha256: storage::digest(&exe)?,
+        installed_at: Utc::now().to_rfc3339(),
+        present: true,
+        modified: false,
+        previous_version: Some(old.version),
+    };
+    raw["inventory"][PRODUCT] = serde_json::to_value(&item)?;
+    storage::atomic_json(&state_path, &raw)?;
+    let warning = platform::write_shortcut(&item).err().map(|error| {
+        format!("Atalho não atualizado: {error}. Abra o Launcher para reparar a integração.")
+    });
+    Ok((exe, warning))
+}
 fn cleanup(dir: &Path) {
     // Only exact names created by this operation, never recursive deletion.
     for name in [
@@ -1042,45 +1105,14 @@ pub fn run_helper(request_path: &Path) -> Result<()> {
         );
         let mut shortcut_warning = None;
         let executable = if request.installation.mode == "managed" {
-            let data = launcher_data()?;
-            let _guard = storage::acquire_lock(&data)?;
-            let state_path = data.join("state.json");
-            let mut raw: serde_json::Value = limited_json(&state_path, 5_000_000)?;
-            let disk: DiskState = serde_json::from_value(raw.clone())?;
-            let old = managed_item(&disk, &request.installation, &request.previous_version)?;
-            ensure!(
-                !disk.jobs.iter().any(|j| crate::model::is_active(&j.phase)),
-                "O Launcher tem operações pendentes"
-            );
-            let product = catalog.product(PRODUCT)?;
-            let exe = platform::install(
+            let (exe, warning) = install_managed(
+                &launcher_data()?,
                 &dir.join(package_name()),
-                Path::new(&old.root),
-                product,
-                &request.version,
-                &selection.package,
+                &request,
+                &selection,
+                &catalog,
             )?;
-            confirm_product(&exe, &request.version)?;
-            let item = Installed {
-                app_id: PRODUCT.into(),
-                name: old.name.clone(),
-                version: request.version.clone(),
-                kind: selection.package.kind.clone(),
-                root: old.root.clone(),
-                executable: exe.to_string_lossy().into(),
-                executable_sha256: storage::digest(&exe)?,
-                installed_at: Utc::now().to_rfc3339(),
-                present: true,
-                modified: false,
-                previous_version: Some(old.version),
-            };
-            raw["inventory"][PRODUCT] = serde_json::to_value(&item)?;
-            storage::atomic_json(&state_path, &raw)?;
-            if let Err(error) = platform::write_shortcut(&item) {
-                shortcut_warning = Some(format!(
-                    "Atalho não atualizado: {error}. Abra o Launcher para reparar a integração."
-                ));
-            }
+            shortcut_warning = warning;
             exe
         } else {
             install_independent(
@@ -1198,6 +1230,7 @@ fn install_independent(source: &Path, i: &Installation, package: &Package) -> Re
             .arg("/S")
             .arg("/CURRENTUSER")
             .arg("/NORESTART")
+            .arg("/UPDATE")
             .raw_arg(format!("/D={}", i.executable.parent().unwrap().display()))
             .status()?;
         ensure!(

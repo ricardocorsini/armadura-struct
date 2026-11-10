@@ -432,6 +432,84 @@ fn native_adapter_real_package() {
         let _ = Command::new(dir.join("uninstall.exe")).arg("/S").status();
         result.unwrap();
     }
+    // Exercise the same locked inventory transaction used by the production
+    // helper, using a second real package installation and only temporary data.
+    let apps = root.path().join("managed apps");
+    fs::create_dir(&apps).unwrap();
+    let apps = dunce::canonicalize(apps).unwrap();
+    let exe = platform::install(&source, &apps, &c.apps[0], &version, &p).unwrap();
+    let exe = dunce::canonicalize(exe).unwrap();
+    let project_file = apps.join(PRODUCT).join("project-preserved.fixture");
+    fs::write(&project_file, b"user project unchanged").unwrap();
+    let old = Installed {
+        app_id: PRODUCT.into(),
+        name: "ArmaduraStruct".into(),
+        version: version.clone(),
+        kind: p.kind.clone(),
+        root: apps.to_string_lossy().into(),
+        executable: exe.to_string_lossy().into(),
+        executable_sha256: storage::digest(&exe).unwrap(),
+        installed_at: Utc::now().to_rfc3339(),
+        present: true,
+        modified: false,
+        previous_version: None,
+    };
+    let data = root.path().join("launcher data");
+    let state_path = data.join("state.json");
+    let mut other = old.clone();
+    other.app_id = "other-test-product".into();
+    let raw = serde_json::json!({
+        "schemaVersion":1,
+        "settings": {"theme":"dark","language":"pt-BR","channel":"stable","checkOnStart":true,"installRoot":apps,"catalogUrl":null,"hiddenApps":[]},
+        "inventory": {(PRODUCT): old, "other-test-product":other},
+        "jobs":[],
+        "futureLauncherField":{"preserve":true}
+    });
+    let request = Request {
+        schema_version: 1,
+        product: PRODUCT.into(),
+        version: version.clone(),
+        previous_version: version.clone(),
+        installation: Installation {
+            mode: "managed".into(),
+            executable: exe.clone(),
+            managed_root: Some(apps.clone()),
+        },
+        envelope: bundled().unwrap(),
+        nonce: "only-in-test".into(),
+        previous_digest: storage::digest(&exe).unwrap(),
+    };
+    let selection = Selection {
+        version: version.clone(),
+        release: c.apps[0].releases[0].clone(),
+        package: p,
+    };
+    let held = storage::acquire_lock(&data).unwrap();
+    storage::atomic_json(&state_path, &raw).unwrap();
+    assert!(install_managed(&data, &source, &request, &selection, &c).is_err());
+    drop(held);
+    let result = install_managed(&data, &source, &request, &selection, &c);
+    let (updated, _) = result.as_ref().unwrap();
+    confirm_product(updated, &version).unwrap();
+    let held = storage::acquire_lock(&data).unwrap();
+    let saved: serde_json::Value = limited_json(&state_path, 5_000_000).unwrap();
+    assert_eq!(saved["settings"], raw["settings"]);
+    assert_eq!(saved["jobs"], raw["jobs"]);
+    assert_eq!(
+        saved["inventory"]["other-test-product"],
+        raw["inventory"]["other-test-product"]
+    );
+    assert_eq!(saved["futureLauncherField"], raw["futureLauncherField"]);
+    let item: Installed = serde_json::from_value(saved["inventory"][PRODUCT].clone()).unwrap();
+    assert_eq!(item.version, version);
+    assert_eq!(item.root, old.root);
+    platform::checked_executable(&item).unwrap();
+    assert_eq!(fs::read(project_file).unwrap(), b"user project unchanged");
+    drop(held);
+    #[cfg(target_os = "windows")]
+    let _ = Command::new(apps.join(PRODUCT).join("uninstall.exe"))
+        .arg("/S")
+        .status();
 }
 
 #[tokio::test]

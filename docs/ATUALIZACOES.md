@@ -16,19 +16,23 @@ O usuário primeiro autoriza o download da versão exibida. Depois da verificaç
 
 Um helper, cópia privada do próprio executável com entrada CLI restrita, espera a liberação do processo original antes da instalação. Ele revalida pacote, destino e identidade, sem receber comandos/URLs do frontend. O estado local registra resultado/interrupção; o aplicativo reaberto confirma a versão efetivamente em execução. Iniciar o helper não é sucesso de instalação.
 
-AppImage: substituir atomicamente, mantendo cópia anterior para recuperação. NSIS: usar o instalador assinado por usuário, aguardar código de saída e confirmar o resultado no reinício. Não prometer rollback de NSIS ou de projetos. Nenhuma migração do schema de projeto faz parte desta entrega.
+AppImage: substituir atomicamente, mantendo cópia anterior para recuperação. NSIS: usar o instalador assinado por usuário com `/UPDATE`, preservando dados, preferências de inicialização e atalhos; aguardar código de saída e confirmar o resultado no reinício. Não prometer rollback de NSIS ou de projetos. Nenhuma migração do schema de projeto faz parte desta entrega.
 
 Consulta única após recuperação/interface prontas e ação manual coordenada, sem polling periódico. Timeout e limites de resposta/transferência, cancelamento durante download, catálogo assinado em cache e prevenção de regressão. Só conteúdo validado pode entrar no cache. Notas são texto, nunca HTML remoto.
 
 ## Validação e limites
 
-Os resultados efetivamente executados serão registrados ao concluir a implementação. Builds e mocks não provam atualização instalada em desktop real. Não publicar release nem instalar no computador do usuário nesta tarefa.
+Validação local em 10/11/2026: `npm run check` (666 testes de domínio/interface e 6 testes dos scripts de release), `npm run build`, `npm run format:check` e 27 testes Rust aprovados. O teste de instalador permanece ignorado por padrão e é executado somente no runner isolado após o build desktop. Chromium não pôde iniciar nesta bancada devido à restrição de sockets do ambiente; os testes de navegador são executados no CI.
+
+Os checks e as capturas de cada commit ficam no [PR #108](https://github.com/ricardocorsini/armadura-struct/pull/108). O job de Linux gera DEB/AppImage; o de Windows gera NSIS. Ambos exercitam o pacote recém-compilado em instalações temporárias independentes e gerenciadas, incluindo a transação do inventário original, seus bloqueios e a preservação de outros registros/arquivos. O teste reinstala o pacote de teste; não simula a atualização gráfica entre duas releases diferentes.
+
+Não executado: atualização completa entre releases publicadas com interação real de janelas, corte de energia, antivírus ou elevação pelo gerenciador do sistema. Builds, testes do adaptador e mocks não substituem essas verificações. Nenhuma release foi publicada ou instalação pessoal atualizada nesta tarefa.
 
 ## Uso
 
 A consulta automática é única por sessão e começa depois da recuperação local. O aviso é passivo e não muda o foco do CAD. **Arquivo → Ajuda → Verificar atualizações** reabre a consulta e a oferta. **Agora não**, Esc e fechar o aviso não iniciam download, instalação ou reinício.
 
-**Baixar versão X** autoriza somente a transferência. O progresso é calculado pelos bytes recebidos. O cancelamento está disponível durante o download; a verificação precisa terminar antes de prosseguir. **Instalar e reiniciar** é uma confirmação separada. Com alterações pendentes, a ação é **Salvar, instalar e reiniciar**: cancelamento/falha do diálogo de salvamento impede o fechamento. Importações, exportações, comandos pendentes e gravações de pasta também impedem a instalação. IndexedDB continua sendo recuperação complementar, nunca prova de um arquivo salvo em disco.
+**Baixar versão X** autoriza somente a transferência. O progresso é calculado pelos bytes recebidos. O cancelamento está disponível durante o download, inclusive antes dos primeiros bytes; a verificação precisa terminar antes de prosseguir. **Instalar e reiniciar** exige marcar a autorização da versão apresentada e confirmar pelo botão. Com alterações pendentes, a ação é **Salvar, instalar e reiniciar**: cancelamento/falha do diálogo de salvamento impede o fechamento. Importações, exportações, comandos pendentes e gravações de pasta também impedem a instalação. IndexedDB continua sendo recuperação complementar, nunca prova de um arquivo salvo em disco.
 
 No modo gerenciado, feche o Launcher e tente novamente se seu lock estiver ocupado. O atualizador valida a identidade e o hash da instalação antes de atualizar somente o registro `armadurastruct` no inventário original; os demais registros, preferências e campos são preservados. Não há um novo inventário paralelo. Não é necessário ter aberto o Launcher para consultar a versão ou iniciar o fluxo.
 
@@ -40,7 +44,7 @@ Instalação de sistema/DEB, formato desconhecido e desenvolvimento não executa
 
 Nenhum endpoint, caminho de executável ou comando de shell é fornecido pelo frontend. O backend usa a versão Cargo realmente em execução, canal estável e origens HTTPS autorizadas, inclusive em cada redirecionamento. A assinatura do catálogo exige `catalog-v1`; essa chave não pode assinar pacotes. Os vetores e as assinaturas públicas existentes são conferidos em testes.
 
-Consulta: timeout total de 20 segundos, limite de 3 MB de envelope e 2 MB de payload, uma tentativa automática e novas tentativas somente por ação manual (coordenadas, com limitação de cliques). Transferência: tamanho exato declarado, limite máximo do contrato de 2 GiB, timeout total de 30 minutos e cancelamento durante leitura. Notas são texto escapado pelo React. Nenhum projeto, desenho, nome de usuário ou caminho local é enviado na consulta.
+Consulta: timeout total de 20 segundos, limite de 3 MB de envelope e 2 MB de payload, uma tentativa automática e novas tentativas somente por ação manual (coordenadas, com limitação de cliques). Transferência: tamanho exato declarado, limite máximo do contrato de 2 GiB, timeout total de 30 minutos, limite de 30 segundos sem início/progresso e cancelamento durante espera/leitura. Antes do download há verificação conservadora de espaço livre no cache e no destino. Notas são texto escapado pelo React. Nenhum projeto, desenho, nome de usuário ou caminho local é enviado na consulta.
 
 Cache e recibos ficam apenas na pasta local de atualizações de `com.openstruct.armadurastruct`. Um catálogo inválido não é usado como cache e um catálogo antigo é recusado. Falha de rede não significa "Atualizado". Os arquivos de download ficam em diretórios privados `stage-*`; uma nova tentativa limpa somente nomes produzidos pela operação e identificados por seu marcador, sem limpeza recursiva. A abertura seguinte informa o último resultado não confirmado/interrompido. Não há reinstalação automática após uma interrupção.
 
