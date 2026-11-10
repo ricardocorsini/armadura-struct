@@ -76,10 +76,17 @@ impl Installation {
         matches!(self.mode.as_str(), "managed" | "appimage" | "nsis")
     }
     pub fn detect(development: bool) -> Result<Self> {
-        let executable = std::env::var_os("APPIMAGE")
-            .map(PathBuf::from)
-            .unwrap_or(std::env::current_exe()?);
-        let executable = dunce::canonicalize(&executable)?;
+        let current = dunce::canonicalize(std::env::current_exe()?)?;
+        let executable = current.clone();
+        #[cfg(target_os = "linux")]
+        let executable = match (std::env::var_os("APPIMAGE"), std::env::var_os("APPDIR")) {
+            (Some(image), Some(appdir))
+                if dunce::canonicalize(&appdir).is_ok_and(|dir| current.starts_with(dir)) =>
+            {
+                dunce::canonicalize(image)?
+            }
+            _ => executable,
+        };
         let mut mode = "system".to_owned();
         let mut managed_root = None;
         if !development {
@@ -102,7 +109,7 @@ impl Installation {
             }
             if mode != "managed" {
                 #[cfg(target_os = "linux")]
-                if std::env::var_os("APPIMAGE").is_some() && !system_path(&executable) {
+                if executable != current && !system_path(&executable) {
                     verify_appimage(&executable)?;
                     mode = "appimage".into();
                 }
@@ -148,6 +155,7 @@ fn verify_appimage(path: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn registered_nsis(executable: &Path) -> Result<bool> {
     use winreg::{enums::*, RegKey};
+    let executable = dunce::canonicalize(executable)?;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let Ok(keys) = hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall")
     else {
@@ -159,9 +167,14 @@ fn registered_nsis(executable: &Path) -> Result<bool> {
         };
         let name: String = k.get_value("DisplayName").unwrap_or_default();
         let location: String = k.get_value("InstallLocation").unwrap_or_default();
+        // Tauri NSIS stores InstallLocation surrounded by a pair of quotes.
+        let location = location
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(&location);
         if name == "ArmaduraStruct"
             && !location.is_empty()
-            && dunce::canonicalize(&location).ok().as_deref() == executable.parent()
+            && dunce::canonicalize(location).ok().as_deref() == executable.parent()
             && Path::new(&location).join("uninstall.exe").is_file()
         {
             return Ok(true);
@@ -276,10 +289,7 @@ fn client(trust: &Trust, timeout: u64) -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(timeout))
-        .user_agent(format!(
-            "ArmaduraStruct/{}/updates",
-            env!("CARGO_PKG_VERSION")
-        ))
+        .user_agent(format!("OpenStruct-Distribution/{VERSION}"))
         .redirect(reqwest::redirect::Policy::custom(move |a| {
             if a.previous().len() >= 5 || trust.check_url(a.url().as_str()).is_err() {
                 a.error("Redirecionamento não autorizado")
@@ -291,11 +301,11 @@ fn client(trust: &Trust, timeout: u64) -> Result<reqwest::Client> {
 }
 async fn fetch(trust: &Trust) -> Result<Envelope> {
     trust.check_url(CATALOG_URL)?;
-    let response = client(trust, 20)?
-        .get(CATALOG_URL)
-        .send()
-        .await?
-        .error_for_status()?;
+    let response = client(trust, 20)?.get(CATALOG_URL).send().await?;
+    envelope_response(response).await
+}
+async fn envelope_response(response: reqwest::Response) -> Result<Envelope> {
+    let response = response.error_for_status()?;
     ensure!(
         response.content_length().unwrap_or(0) <= MAX_CATALOG as u64,
         "Catálogo excede limite"
@@ -714,6 +724,11 @@ impl Updater {
             storage::digest(&self.installation.executable)? == request.previous_digest,
             "A instalação foi alterada externamente; reinicie a verificação"
         );
+        let ready = dir.join("ready");
+        storage::reject_symlink(&ready)?;
+        if ready.exists() {
+            fs::remove_file(&ready)?;
+        }
         let mut command = Command::new(dir.join(helper_name()));
         command
             .arg("--openstruct-update-helper")
@@ -730,7 +745,7 @@ impl Updater {
             .spawn()
             .context("Não foi possível iniciar o assistente de atualização")?;
         for _ in 0..100 {
-            if dir.join("ready").is_file() {
+            if fs::read_to_string(&ready).is_ok_and(|s| s == request.nonce) {
                 self.change(|s| s.phase = "armed".into());
                 return Ok(self.snapshot());
             }
@@ -763,11 +778,9 @@ impl Updater {
     }
     async fn download(&self, package: &Package, path: &Path) -> Result<()> {
         let url = self.trust.check_url(&package.url)?;
-        let response = client(&self.trust, 1800)?
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?;
+        let response = self
+            .download_response(client(&self.trust, 1800)?.get(url))
+            .await?;
         ensure!(
             response.content_length().is_none_or(|n| n == package.size),
             "Tamanho anunciado não confere"
@@ -794,6 +807,23 @@ impl Updater {
         file.sync_all().await?;
         ensure!(received == package.size, "Download incompleto");
         Ok(())
+    }
+    async fn download_response(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        let pending = request.send();
+        tokio::pin!(pending);
+        let started = std::time::Instant::now();
+        loop {
+            ensure!(!self.cancel.load(Ordering::Relaxed), "Download cancelado");
+            tokio::select! {
+                response = &mut pending => return Ok(response?.error_for_status()?),
+                _ = tokio::time::sleep(Duration::from_millis(150)) => {
+                    ensure!(started.elapsed() < Duration::from_secs(30), "O servidor não iniciou o download em 30 segundos. Tente novamente");
+                }
+            }
+        }
     }
 }
 fn package_name() -> &'static str {
@@ -878,7 +908,6 @@ fn cleanup(dir: &Path) {
     for name in [
         package_name(),
         "request.json",
-        "stage-owner.json",
         "authorized.json",
         "ready",
         helper_name(),
@@ -886,6 +915,16 @@ fn cleanup(dir: &Path) {
         let p = dir.join(name);
         if fs::symlink_metadata(&p).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink()) {
             let _ = fs::remove_file(p);
+        }
+    }
+    // Windows cannot unlink the running helper. Keep its ownership marker so
+    // a later explicit attempt can remove that exact file after the helper exits.
+    if fs::read_dir(dir).is_ok_and(|mut entries| {
+        entries.all(|entry| entry.is_ok_and(|e| e.file_name() == "stage-owner.json"))
+    }) {
+        let marker = dir.join("stage-owner.json");
+        if fs::symlink_metadata(&marker).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink()) {
+            let _ = fs::remove_file(marker);
         }
     }
     let _ = fs::remove_dir(dir);
@@ -956,7 +995,7 @@ pub fn run_helper(request_path: &Path) -> Result<()> {
         selection.version == request.version,
         "Versão do pedido não confere"
     );
-    fs::write(dir.join("ready"), b"ready")?;
+    fs::write(dir.join("ready"), request.nonce.as_bytes())?;
     let lock = OpenOptions::new()
         .read(true)
         .write(true)

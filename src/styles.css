@@ -4386,8 +4386,25 @@ button.hierarchy-drawing {
 .update-dialog::backdrop {
   background: #0006;
 }
+.update-dialog p {
+  color: var(--text);
+}
 .update-dialog .modal-actions {
   flex-wrap: wrap;
+}
+.update-consent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px;
+  cursor: pointer;
+}
+.update-consent input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  margin: 0;
+  padding: 0;
 }
 .update-notes {
   white-space: pre-wrap;

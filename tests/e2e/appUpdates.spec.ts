@@ -8,6 +8,8 @@ function nativeMock(options: {
   pause?: boolean;
   save?: string;
   error?: string;
+  pauseArm?: boolean;
+  armError?: string;
 }) {
   const state = {
     revision: 1,
@@ -32,25 +34,48 @@ function nativeMock(options: {
   const calls: { command: string; version?: string }[] = [];
   let release: (() => void) | undefined;
   let callbackId = 0;
+  const callbacks = new Map<number, (event: unknown) => unknown>();
+  const listeners = new Map<number, { event: string; callback: number }>();
+  let releaseSave: (() => void) | undefined,
+    releaseArm: (() => void) | undefined;
   const mock = {
     state,
     calls,
     pause: !!options.pause,
     save: options.save ?? 'success',
     resume: () => release?.(),
+    resumeSave: () => releaseSave?.(),
+    resumeArm: () => releaseArm?.(),
+    emit: async (event: string) => {
+      for (const [id, l] of listeners) {
+        if (l.event === event)
+          await callbacks.get(l.callback)?.({ event, id, payload: null });
+      }
+    },
   };
   Object.assign(window, {
     isTauri: true,
     updatesMock: mock,
-    __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+    __TAURI_EVENT_PLUGIN_INTERNALS__: {
+      unregisterListener: (_event: string, id: number) => {
+        listeners.delete(id);
+      },
+    },
     __TAURI_INTERNALS__: {
       metadata: {
         currentWindow: { label: 'main' },
         currentWebview: { label: 'main' },
       },
-      transformCallback: () => ++callbackId,
+      transformCallback: (callback: (event: unknown) => unknown) => {
+        const id = ++callbackId;
+        callbacks.set(id, callback);
+        return id;
+      },
       unregisterCallback: () => {},
-      invoke: async (command: string, args?: { version?: string }) => {
+      invoke: async (
+        command: string,
+        args?: { version?: string; event?: string; handler?: number },
+      ) => {
         calls.push({ command, version: args?.version });
         if (command === 'updates_snapshot') return structuredClone(state);
         if (command === 'updates_check') {
@@ -67,6 +92,7 @@ function nativeMock(options: {
             await new Promise<void>((r) => {
               release = r;
             });
+          await new Promise((r) => setTimeout(r, 50));
           if (state.phase === 'cancelled') throw 'Download cancelado';
           state.revision++;
           state.phase = 'ready';
@@ -80,18 +106,32 @@ function nativeMock(options: {
           return structuredClone(state);
         }
         if (command === 'updates_arm') {
+          if (options.pauseArm)
+            await new Promise<void>((r) => {
+              releaseArm = r;
+            });
+          if (options.armError) throw options.armError;
           state.revision++;
           state.phase = 'armed';
           return structuredClone(state);
         }
         if (command === 'updates_finish') return null;
-        if (command === 'plugin:dialog|save')
+        if (command === 'plugin:dialog|save') {
+          if (mock.save === 'pause')
+            await new Promise<void>((r) => {
+              releaseSave = r;
+            });
           return mock.save === 'cancel'
             ? null
             : '/fixture/project.armstruct.json';
+        }
         if (command === 'plugin:fs|write_text_file' && mock.save === 'fail')
           throw 'Sem permissão';
-        if (command === 'plugin:event|listen') return ++callbackId;
+        if (command === 'plugin:event|listen') {
+          const id = ++callbackId;
+          listeners.set(id, { event: args!.event!, callback: args!.handler! });
+          return id;
+        }
         return null;
       },
     },
@@ -104,6 +144,7 @@ async function setup(
   await page.addInitScript(nativeMock, options);
   await page.goto('/');
   await expect(page.locator('.busy-overlay')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Desenho', exact: true }).click();
 }
 const modal = (page: Page) =>
   page.getByRole('dialog', { name: 'Atualizações do ArmaduraStruct' });
@@ -281,4 +322,113 @@ test('modo web é explícito, acessível por teclado e cabe em janela baixa', as
   await page.screenshot({ path: 'docs/updates-web.png' });
   await page.keyboard.press('Escape');
   await expect(modal(page)).not.toBeVisible();
+});
+
+async function prepareInstall(page: Page) {
+  await manual(page);
+  await modal(page)
+    .getByRole('button', { name: 'Baixar versão 0.10.0' })
+    .click();
+  await modal(page)
+    .getByRole('checkbox', {
+      name: 'Autorizo instalar a versão 0.10.0 e reiniciar o aplicativo',
+    })
+    .check();
+}
+test('fechar a janela durante o salvamento pré-instalação é impedido', async ({
+  page,
+}) => {
+  await setup(page, { save: 'pause' });
+  const cad = page.getByRole('textbox', { name: 'Comando CAD' });
+  for (const c of ['B', '0,0', '1000,0', '']) {
+    await cad.fill(c);
+    await cad.press('Enter');
+  }
+  await page.keyboard.press('Escape');
+  await prepareInstall(page);
+  await modal(page)
+    .getByRole('button', { name: 'Salvar, instalar e reiniciar' })
+    .click();
+  await expect.poll(() => calls(page, 'plugin:dialog|save')).toBe(1);
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        updatesMock: { emit: (event: string) => Promise<void> };
+      }
+    ).updatesMock.emit('tauri://close-requested'),
+  );
+  expect(await calls(page, 'plugin:window|destroy')).toBe(0);
+  await page.evaluate(() => {
+    const mock = (
+      window as unknown as {
+        updatesMock: { save: string; resumeSave: () => void };
+      }
+    ).updatesMock;
+    mock.save = 'cancel';
+    mock.resumeSave();
+  });
+  await expect(modal(page).getByRole('alert')).toContainText('não foi salvo');
+  expect(await calls(page, 'updates_finish')).toBe(0);
+});
+test('troca de projeto durante a preparação invalida a confirmação', async ({
+  page,
+}) => {
+  await setup(page, { pauseArm: true });
+  await prepareInstall(page);
+  await modal(page)
+    .getByRole('button', { name: 'Instalar e reiniciar', exact: true })
+    .click();
+  await expect.poll(() => calls(page, 'updates_arm')).toBe(1);
+  await page.getByTestId('project-input').setInputFiles({
+    name: 'other.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        ...emptyProject(),
+        id: 'other-project',
+        name: 'Outro preservado',
+      }),
+    ),
+  });
+  await expect(page.getByRole('banner')).toContainText('Outro preservado');
+  await page.evaluate(() =>
+    (
+      window as unknown as { updatesMock: { resumeArm: () => void } }
+    ).updatesMock.resumeArm(),
+  );
+  await expect(modal(page).getByRole('alert')).toContainText('mudou');
+  expect(await calls(page, 'updates_finish')).toBe(0);
+  expect(await calls(page, 'updates_cancel')).toBe(1);
+});
+test('mudança da versão disponível descarta a preparação e não instala', async ({
+  page,
+}) => {
+  await setup(page, {
+    armError:
+      'A versão ou pacote disponível mudou. Verifique novamente antes de instalar',
+  });
+  await prepareInstall(page);
+  await modal(page)
+    .getByRole('button', { name: 'Instalar e reiniciar', exact: true })
+    .click();
+  await expect(modal(page).getByRole('alert')).toContainText('mudou');
+  await expect.poll(() => calls(page, 'updates_cancel')).toBe(1);
+  expect(await calls(page, 'updates_finish')).toBe(0);
+});
+test('comando CAD pendente impede o fechamento para instalar', async ({
+  page,
+}) => {
+  await setup(page);
+  const cad = page.getByRole('textbox', { name: 'Comando CAD' });
+  await cad.fill('B');
+  await cad.press('Enter');
+  await prepareInstall(page);
+  await modal(page)
+    .getByRole('button', { name: 'Instalar e reiniciar', exact: true })
+    .click();
+  await expect(modal(page).getByRole('alert')).toContainText(
+    'Conclua ou cancele',
+  );
+  expect(await calls(page, 'updates_arm')).toBe(0);
+  expect(await calls(page, 'updates_finish')).toBe(0);
 });

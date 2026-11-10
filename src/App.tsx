@@ -701,6 +701,10 @@ export default function App() {
   const [updateRequest, setUpdateRequest] = useState(0);
   const [updateModal, setUpdateModal] = useState(false);
   const fileOperations = useRef(0);
+  const updateInstallGuard = useRef(false);
+  const updateInstalling = useCallback((value: boolean) => {
+    updateInstallGuard.current = value;
+  }, []);
   // Histórico local de navegação: independente de autosave, backups e revisões.
   const [recents, setRecents] = useState<RecentEntry[]>(() => readRecents());
   const [recentOpen, setRecentOpen] = useState(false),
@@ -724,6 +728,13 @@ export default function App() {
     void import('@tauri-apps/api/window')
       .then(async ({ getCurrentWindow }) => {
         const stop = await getCurrentWindow().onCloseRequested((e) => {
+          if (updateInstallGuard.current) {
+            e.preventDefault();
+            notify(
+              'Aguarde o salvamento e a confirmação da atualização antes de fechar.',
+            );
+            return;
+          }
           if (hasPendingFolderWrites()) {
             e.preventDefault();
             notify(
@@ -8097,6 +8108,7 @@ export default function App() {
         manualRequest={updateRequest}
         needsSave={p !== savedBaseline.current}
         onModal={setUpdateModal}
+        onInstalling={updateInstalling}
         protect={async () => {
           const base = historyRef.current.present;
           const context = maskImportContext.current;
@@ -8107,6 +8119,17 @@ export default function App() {
               busy ||
               !ready ||
               draft.length ||
+              (tool !== 'select' && tool !== 'pan') ||
+              stirrupSession ||
+              stirrupDialog ||
+              followRequest ||
+              measureSession ||
+              maskManip ||
+              match ||
+              maskOffset ||
+              maskCad ||
+              maskCalibration ||
+              cloneRequest ||
               transformRequest ||
               alignmentRequest ||
               vertexRequest ||

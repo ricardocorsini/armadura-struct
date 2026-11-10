@@ -24,6 +24,7 @@ export default function AppUpdates({
   needsSave,
   protect,
   onModal,
+  onInstalling,
   bridge = updateBridge,
 }: {
   ready: boolean;
@@ -31,6 +32,7 @@ export default function AppUpdates({
   needsSave: boolean;
   protect: () => Promise<() => void>;
   onModal: (open: boolean) => void;
+  onInstalling: (active: boolean) => void;
   bridge?: UpdateBridge;
 }) {
   const [state, setState] = useState<UpdateSnapshot>();
@@ -55,7 +57,14 @@ export default function AppUpdates({
       const s = await productUpdateChecker.check(manual);
       if (id === sequence.current) accept(s);
     } catch (e) {
-      if (id === sequence.current) setIssue(String(e));
+      if (id === sequence.current) {
+        setIssue(String(e));
+        setState((old) =>
+          old
+            ? { ...old, status: 'error', offer: null, message: String(e) }
+            : old,
+        );
+      }
     } finally {
       if (id === sequence.current) setChecking(false);
     }
@@ -125,11 +134,12 @@ export default function AppUpdates({
     running.current = true;
     setWorking(true);
     setIssue('');
-    let armed = false;
+    let armAttempted = false;
+    onInstalling(true);
     try {
       const assertUnchanged = await protect();
+      armAttempted = true;
       accept(await bridge.arm(state.offer.version));
-      armed = true;
       assertUnchanged();
       setHandedOff(true);
       await bridge.finish(state.offer.version);
@@ -137,7 +147,7 @@ export default function AppUpdates({
       setHandedOff(false);
       setConsent(false);
       setIssue(String(e));
-      if (armed)
+      if (armAttempted)
         await bridge
           .cancel()
           .then(accept)
@@ -145,6 +155,7 @@ export default function AppUpdates({
     } finally {
       running.current = false;
       setWorking(false);
+      onInstalling(false);
     }
   };
   useEffect(() => {
@@ -267,7 +278,7 @@ export default function AppUpdates({
             )}
             {['ready', 'armed'].includes(state.phase) && (
               <>
-                <label className="field">
+                <label className="update-consent">
                   <input
                     type="checkbox"
                     checked={consent}

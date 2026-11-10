@@ -37,6 +37,7 @@ fn envelope(c: &Catalog, key: &SigningKey) -> Envelope {
         key_id: "catalog-v1".into(),
     }
 }
+#[cfg(unix)]
 fn fake_appimage(path: &Path, extra: u8) {
     let mut b = vec![extra; 80];
     b[..4].copy_from_slice(b"\x7fELF");
@@ -430,5 +431,120 @@ fn native_adapter_real_package() {
             install_independent(&source, &i, &p).and_then(|_| confirm_product(&exe, &version));
         let _ = Command::new(dir.join("uninstall.exe")).arg("/S").status();
         result.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn catalogue_http_errors_json_and_size_limits() {
+    for (status, body) in [
+        (404, b"missing".to_vec()),
+        (500, b"server error".to_vec()),
+        (200, b"not JSON".to_vec()),
+        (200, vec![b' '; MAX_CATALOG + 1]),
+    ] {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let thread = std::thread::spawn(move || {
+            if let Some(request) = server.recv_timeout(Duration::from_secs(3)).unwrap() {
+                let _ =
+                    request.respond(tiny_http::Response::from_data(body).with_status_code(status));
+            }
+        });
+        let response = reqwest::Client::new().get(url).send().await.unwrap();
+        assert!(envelope_response(response).await.is_err());
+        thread.join().unwrap();
+    }
+}
+#[tokio::test]
+async fn http_redirect_to_untrusted_origin_is_refused() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let thread = std::thread::spawn(move || {
+        if let Some(request) = server.recv_timeout(Duration::from_secs(3)).unwrap() {
+            let _ = request.respond(
+                tiny_http::Response::empty(302).with_header(
+                    tiny_http::Header::from_bytes(
+                        "Location",
+                        "https://not-openstruct.invalid/package",
+                    )
+                    .unwrap(),
+                ),
+            );
+        }
+    });
+    // HTTP loopback is only a response fixture. Production checks the fixed HTTPS URL before sending.
+    let result = client(&trust().unwrap(), 2).unwrap().get(url).send().await;
+    assert!(result.is_err());
+    thread.join().unwrap();
+}
+#[tokio::test]
+async fn stalled_request_has_a_finite_timeout() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let thread = std::thread::spawn(move || {
+        if let Some(_request) = server.recv_timeout(Duration::from_secs(3)).unwrap() {
+            std::thread::sleep(Duration::from_millis(1400));
+        }
+    });
+    let error = client(&trust().unwrap(), 1)
+        .unwrap()
+        .get(url)
+        .send()
+        .await
+        .unwrap_err();
+    assert!(error.is_timeout());
+    thread.join().unwrap();
+}
+#[tokio::test]
+async fn cancelling_before_response_headers_does_not_wait_for_server_timeout() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let thread = std::thread::spawn(move || {
+        if let Some(_request) = server.recv_timeout(Duration::from_secs(3)).unwrap() {
+            std::thread::sleep(Duration::from_millis(1400));
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let updater = Updater::new(
+        dir.path().into(),
+        Installation {
+            mode: "development".into(),
+            executable: std::env::current_exe().unwrap(),
+            managed_root: None,
+        },
+        "0.5.0".into(),
+    )
+    .unwrap();
+    let cancel = updater.clone();
+    let task = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel().unwrap();
+    });
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        updater.download_response(reqwest::Client::new().get(url)),
+    )
+    .await
+    .expect("Cancellation must not wait for the server")
+    .unwrap_err();
+    assert!(error.to_string().contains("cancelado"));
+    task.await.unwrap();
+    thread.join().unwrap();
+}
+#[test]
+fn valid_signature_does_not_make_invalid_json_or_schema_acceptable() {
+    let (t, c, key) = fixture();
+    for payload in ["{".to_owned(), "{}".to_owned(), {
+        let mut v = serde_json::to_value(&c).unwrap();
+        v["schemaVersion"] = 99.into();
+        v.to_string()
+    }] {
+        let signature = STANDARD.encode(key.sign(payload.as_bytes()).to_bytes());
+        let bad = Envelope {
+            payload,
+            signature,
+            key_id: "catalog-v1".into(),
+        };
+        assert!(t.open_envelope(&bad).is_err());
     }
 }
