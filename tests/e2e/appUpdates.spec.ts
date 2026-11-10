@@ -172,6 +172,7 @@ test('consulta automática é passiva e adiar/consultar não baixa ou instala', 
   await cad.focus();
   await expect(page.locator('.update-banner')).toContainText('0.10.0');
   await expect(cad).toBeFocused();
+  await page.screenshot({ path: 'docs/updates-passive.png' });
   await page
     .locator('.update-banner')
     .getByRole('button', { name: 'Agora não' })
@@ -186,7 +187,6 @@ test('consulta automática é passiva e adiar/consultar não baixa ou instala', 
   expect(await calls(page, 'updates_check')).toBe(1);
   expect(await calls(page, 'updates_prepare')).toBe(0);
   expect(await calls(page, 'updates_finish')).toBe(0);
-  await page.screenshot({ path: 'docs/updates-passive.png' });
 });
 test('instalar exige download, verificação e confirmação explícita da mesma versão', async ({
   page,
@@ -241,6 +241,7 @@ test('cancelar download mantém o CAD e não inicia instalação', async ({
     'value',
     '25',
   );
+  await page.screenshot({ path: 'docs/updates-download.png' });
   await modal(page).getByRole('button', { name: 'Cancelar download' }).click();
   await expect(
     modal(page).getByRole('button', { name: 'Agora não', exact: true }),

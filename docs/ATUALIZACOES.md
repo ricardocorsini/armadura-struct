@@ -22,7 +22,7 @@ Consulta única após recuperação/interface prontas e ação manual coordenada
 
 ## Validação e limites
 
-Validação local em 10/11/2026: `npm run check` (666 testes de domínio/interface e 6 testes dos scripts de release), `npm run build`, `npm run format:check` e 27 testes Rust aprovados. O teste de instalador permanece ignorado por padrão e é executado somente no runner isolado após o build desktop. Chromium não pôde iniciar nesta bancada devido à restrição de sockets do ambiente; os testes de navegador são executados no CI.
+Validação local em 10/11/2026: `npm run check` (666 testes de domínio/interface e 6 testes dos scripts de release), `npm run build`, `npm run format:check` e 28 testes Rust aprovados. O teste de instalador permanece ignorado por padrão e é executado somente no runner isolado após o build desktop. Chromium não pôde iniciar nesta bancada devido à restrição de sockets do ambiente; os testes de navegador são executados no CI.
 
 Os checks e as capturas de cada commit ficam no [PR #108](https://github.com/ricardocorsini/armadura-struct/pull/108). O job de Linux gera DEB/AppImage; o de Windows gera NSIS. Ambos exercitam o pacote recém-compilado em instalações temporárias independentes e gerenciadas, incluindo a transação do inventário original, seus bloqueios e a preservação de outros registros/arquivos. O teste reinstala o pacote de teste; não simula a atualização gráfica entre duas releases diferentes.
 

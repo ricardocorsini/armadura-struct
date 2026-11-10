@@ -73,6 +73,16 @@ fn semantic_versions_and_no_downgrade() {
     assert!(select(&c, "unknown", "linux", "x86_64", "stable").is_err());
 }
 #[test]
+fn build_metadata_does_not_make_a_version_newer() {
+    let (_, mut c, _) = fixture();
+    c.apps[0].releases[0].version = "0.10.0+rebuilt".into();
+    for installed in ["0.10.0", "0.10.0+different-build"] {
+        assert!(select(&c, installed, "linux", "x86_64", "stable")
+            .unwrap()
+            .is_none());
+    }
+}
+#[test]
 fn platform_architecture_and_channel_are_respected() {
     let (_, mut c, _) = fixture();
     assert!(select(&c, "0.9.0", "linux", "aarch64", "stable").is_err());

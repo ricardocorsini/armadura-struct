@@ -229,7 +229,7 @@ pub fn select(
     let mut newer = false;
     for r in candidates {
         let v = Version::parse(&r.version)?;
-        if (channel == "stable" && !v.pre.is_empty()) || v <= installed {
+        if (channel == "stable" && !v.pre.is_empty()) || v.cmp_precedence(&installed).is_le() {
             continue;
         }
         newer = true;
@@ -246,7 +246,9 @@ pub fn select(
                 "Chave de catálogo não pode assinar pacotes"
             );
             ensure!(
-                Version::parse(VERSION)? >= Version::parse(&p.min_launcher_version)?,
+                Version::parse(VERSION)?
+                    .cmp_precedence(&Version::parse(&p.min_launcher_version)?)
+                    .is_ge(),
                 "Este pacote exige um núcleo de distribuição mais novo; atualize pelo Launcher"
             );
             return Ok(Some(Selection {

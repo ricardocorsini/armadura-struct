@@ -8194,17 +8194,6 @@ export default function App() {
             pendingWork={
               !!(
                 draft.length ||
-                (tool !== 'select' && tool !== 'pan') ||
-                stirrupSession ||
-                stirrupDialog ||
-                followRequest ||
-                measureSession ||
-                maskManip ||
-                match ||
-                maskOffset ||
-                maskCad ||
-                maskCalibration ||
-                cloneRequest ||
                 transformRequest ||
                 alignmentRequest ||
                 vertexRequest ||
