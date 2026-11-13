@@ -87,3 +87,4 @@ A master desta revisão salva projetos em `armadurastruct/35` e pacotes em `open
 - [Contribuir](CONTRIBUTING.md)
 - [Instruções para agentes de programação](../AGENTS.md)
 - Relatórios de validação: [encaixes CAD (#162)](VALIDACAO-ENCAIXES-CAD.md), [convenções de cotagem (AS-30)](VALIDACAO-AS-30.md), [plugins v1](plugins/VALIDATION.md)
+- Relatórios de usabilidade: [Repetir estribo (#179)](usabilidade/REPETIR-ESTRIBO.md)
