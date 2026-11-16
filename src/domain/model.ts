@@ -75,18 +75,32 @@ import {
 
 export const DISTRIBUTION_BAND_SCHEMA = 'armadurastruct/37' as const;
 import {
+  CUSTOM_SEAL_PROJECT_SCHEMA,
   SEAL_PROJECT_SCHEMA,
+  TEMPLATE_SOURCE_PROJECT_SCHEMA,
+  hasTemplateSourceData,
+  hasCustomSealData,
+  isSealProjectSchema,
   hasSealData,
   projectSealPropertiesSchema,
   sheetSealBindingsSchema,
   sheetSealPropertiesSchema,
 } from './sealFieldSchema';
+import {
+  templateSourcesSchema,
+  validateTemplateSources,
+} from './sheetTemplateSources';
+import {
+  sealPropertyDefinitionsSchema,
+  sealPropertyValuesSchema,
+  validateSealPropertyData,
+} from './sealProperties';
 
 export function withDistributionBandVersion(project: Project): Project {
   if (
     project.schema === DISTRIBUTION_BAND_SCHEMA ||
     project.schema === SHEET_TEMPLATE_PROJECT_SCHEMA ||
-    project.schema === SEAL_PROJECT_SCHEMA ||
+    isSealProjectSchema(project.schema) ||
     !(
       hasDistributionBand(project.bars) ||
       hasDistributionBand(project.scheduleLock?.bars)
@@ -350,6 +364,9 @@ const schema = z.object({
   symbolInstances: z.array(symbolInstanceSchema).max(10000).optional(),
   sheetTemplates: z.array(sheetTemplateSchema).max(1000).optional(),
   sealProperties: projectSealPropertiesSchema.optional(),
+  sealPropertyDefinitions: sealPropertyDefinitionsSchema.optional(),
+  sealPropertyValues: sealPropertyValuesSchema.optional(),
+  sheetTemplateSources: templateSourcesSchema.optional(),
   sheets: z
     .array(
       z.object({
@@ -358,6 +375,7 @@ const schema = z.object({
         paperTemplate: sheetTemplateSchema.optional(),
         sealProperties: sheetSealPropertiesSchema.optional(),
         sealBindings: sheetSealBindingsSchema.optional(),
+        sealPropertyValues: sealPropertyValuesSchema.optional(),
         format: z.enum(['A0', 'A1', 'A2', 'A3', 'A4', 'custom']),
         customSize: z
           .object({
@@ -616,7 +634,16 @@ export function decodeProject(
   options: { allowOrphanReferences?: boolean } = {},
 ): Project {
   const input = JSON.parse(raw);
-  const sealVersion = input?.schema === SEAL_PROJECT_SCHEMA;
+  const sourceVersion = input?.schema === TEMPLATE_SOURCE_PROJECT_SCHEMA;
+  if (!sourceVersion && hasTemplateSourceData(input))
+    throw new Error(
+      'Modelos vinculados a uma origem externa exigem formato 42.',
+    );
+  const customVersion =
+    sourceVersion || input?.schema === CUSTOM_SEAL_PROJECT_SCHEMA;
+  if (!customVersion && hasCustomSealData(input))
+    throw new Error('Propriedades personalizadas do selo exigem formato 41.');
+  const sealVersion = customVersion || input?.schema === SEAL_PROJECT_SCHEMA;
   if (!sealVersion && hasSealData(input))
     throw new Error('Dados e vínculos do selo exigem formato 39.');
   // /36 is the experimental template format; /38 composes it with /35 and /37.
@@ -1005,13 +1032,17 @@ export function decodeProject(
   let p: Project = {
     ...parsed,
     id,
-    schema: sealVersion
-      ? SEAL_PROJECT_SCHEMA
-      : templateVersion
-        ? SHEET_TEMPLATE_PROJECT_SCHEMA
-        : bandVersion
-          ? DISTRIBUTION_BAND_SCHEMA
-          : 'armadurastruct/35',
+    schema: sourceVersion
+      ? TEMPLATE_SOURCE_PROJECT_SCHEMA
+      : customVersion
+        ? CUSTOM_SEAL_PROJECT_SCHEMA
+        : sealVersion
+          ? SEAL_PROJECT_SCHEMA
+          : templateVersion
+            ? SHEET_TEMPLATE_PROJECT_SCHEMA
+            : bandVersion
+              ? DISTRIBUTION_BAND_SCHEMA
+              : 'armadurastruct/35',
     ...(linkedFiles === undefined ? {} : { linkedFiles }),
     layers: parsed.layers ?? defaultLayers(),
     sheets: v4
@@ -1064,6 +1095,8 @@ export function decodeProject(
     if (sheet.paperTemplate) validateSheetTemplate(sheet.paperTemplate);
     validateSheetLayout(sheet);
   }
+  validateSealPropertyData(p);
+  validateTemplateSources(p);
   const ids = p.bars.map((b) => b.id);
   if (new Set(ids).size !== ids.length)
     throw new Error('IDs de armadura duplicados.');

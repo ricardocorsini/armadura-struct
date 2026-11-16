@@ -3,6 +3,7 @@ import { paperPrimitiveBounds, type PaperPrimitive } from './paperText';
 import {
   sealBindingForField,
   resolveSealField,
+  withSealAffixes,
   type ResolvedSealField,
 } from './sealFields';
 import type {
@@ -58,9 +59,15 @@ export function savedSheetSealContent(
 export type ComposedSealField = {
   id: string;
   label: string;
+  /** Complete visible text, including literal prefix and suffix. */
   text: string;
   source?: ResolvedSealField['source'];
   inherited?: true;
+  /** Custom property ID, when the field uses one. */
+  property?: string;
+  origin?: ResolvedSealField['origin'];
+  explicitEmpty?: true;
+  invalid?: true;
 };
 
 function layoutField(
@@ -114,6 +121,8 @@ const diagnosticMessages = {
   'unsupported-source': 'Origem incompatível com este campo.',
   'missing-source': 'Origem removida ou indisponível. Escolha outra origem.',
   'invalid-date': 'Data documental inválida.',
+  'invalid-value':
+    'O valor guardado não atende ao tipo ou às regras da propriedade.',
   mixed: 'A folha tem valores distintos para este campo.',
   partial: 'Um ou mais desenhos da folha estão sem valor para este campo.',
   'calculation-unavailable': 'O valor calculado está indisponível.',
@@ -156,7 +165,9 @@ export function composeTemplateSeal(
 
     if (
       resolved.source?.kind === 'manual' &&
-      ['@PESO_ACO', '@NUMERO', '@TOTAL', '@ESCALAS'].includes(binding.field)
+      ['@PESO_ACO', '@NUMERO', '@TOTAL', '@ESCALAS'].includes(
+        binding.field ?? '',
+      )
     ) {
       notices.push(
         message('manual', 'Texto manual. Este valor não foi calculado.'),
@@ -204,12 +215,16 @@ export function composeTemplateSeal(
           ')';
       }
     }
+    text = withSealAffixes(binding, text);
     fields.push({
       id: field.id,
       label: field.label,
       text,
       source: resolved.source,
       inherited: resolved.inherited,
+      ...(binding.property === undefined ? {} : { property: binding.property }),
+      ...(resolved.origin ? { origin: resolved.origin } : {}),
+      ...(resolved.explicitEmpty ? { explicitEmpty: true as const } : {}),
     });
     if (
       text
@@ -240,5 +255,8 @@ export function composeTemplateSeal(
     }
     return lines;
   });
+  for (const field of fields)
+    if (issues.some((issue) => issue.fieldId === field.id))
+      field.invalid = true;
   return { decorations, issues, notices, fields };
 }

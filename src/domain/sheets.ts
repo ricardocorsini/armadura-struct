@@ -93,6 +93,9 @@ export function duplicateSheet(
     sealProperties: source.sealProperties
       ? structuredClone(source.sealProperties)
       : undefined,
+    sealPropertyValues: source.sealPropertyValues
+      ? structuredClone(source.sealPropertyValues)
+      : undefined,
     sealBindings: source.sealBindings
       ? structuredClone(source.sealBindings)
       : undefined,

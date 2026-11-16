@@ -15,7 +15,7 @@ import {
 import { initialSheet, sheetSize } from '../domain/paperFormat';
 import {
   applySheetTemplate,
-  decodeSheetTemplate,
+  decodeSheetTemplateFile,
   duplicateSheetTemplate,
   encodeSheetTemplate,
   paperRectFromPoints,
@@ -27,7 +27,18 @@ import {
   validateSheetTemplate,
   type SheetTemplate,
 } from '../domain/sheetTemplates';
-import type { Point, Project, Sheet } from '../domain/types';
+import {
+  planSealPropertyImport,
+  resolveSealPropertyImport,
+  withSealPropertyImport,
+  type SealPropertyDefinition,
+  type SealPropertyImportDecision,
+  type SealPropertyImportItem,
+  type SealPropertyImportResult,
+} from '../domain/sealProperties';
+import { uid, type Point, type Project, type Sheet } from '../domain/types';
+import SealPropertyImportPanel from './SealPropertyImportPanel';
+import TemplateSourcePanel from './TemplateSourcePanel';
 import { importMask, pickNativeFile, safeName, saveFile } from '../lib/files';
 import SheetTemplateCalibration, {
   type ImportedTemplateGeometry,
@@ -239,6 +250,20 @@ export default function SheetTemplateDialog({
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [importResolution, setImportResolution] = useState('');
+  /** Definitions read from a template file, awaiting an explicit mapping. */
+  const [propertyImport, setPropertyImport] = useState<{
+    template: SheetTemplate;
+    properties: SealPropertyDefinition[];
+    plan: SealPropertyImportItem[];
+    resolution: string;
+  }>();
+  /** Confirmed mapping, recorded together with the template when saving. */
+  const [pendingProperties, setPendingProperties] =
+    useState<Pick<SealPropertyImportResult, 'additions' | 'aliases'>>();
+  const availableProperties = [
+    ...(project.sealPropertyDefinitions ?? []),
+    ...(pendingProperties?.additions ?? []),
+  ];
   const context = useRef(projectContext(project, initialSheetId));
   const initialContext =
     context.current === projectContext(project, initialSheetId);
@@ -301,6 +326,8 @@ export default function SheetTemplateDialog({
     setAreaPoints(undefined);
     setSource(undefined);
     setImportResolution('');
+    setPropertyImport(undefined);
+    setPendingProperties(undefined);
     edit(structuredClone(template));
   };
   const commit = (next: Project, message: string) => {
@@ -321,7 +348,12 @@ export default function SheetTemplateDialog({
   };
   const save = () => {
     try {
-      const next = saveSheetTemplate(project, draft);
+      const next = saveSheetTemplate(
+        pendingProperties
+          ? withSealPropertyImport(project, pendingProperties)
+          : project,
+        draft,
+      );
       if (
         !commit(
           next,
@@ -337,6 +369,7 @@ export default function SheetTemplateDialog({
         ),
       );
       setImportResolution('');
+      setPendingProperties(undefined);
     } catch (cause) {
       report(cause);
     }
@@ -357,7 +390,9 @@ export default function SheetTemplateDialog({
       if (
         await saveFile(
           `${safeName(validated.name)}.armstruct-sheet-template.json`,
-          encodeSheetTemplate(validated),
+          encodeSheetTemplate(validated, {
+            sealPropertyDefinitions: availableProperties,
+          }),
           'application/json',
           'json',
         )
@@ -384,7 +419,8 @@ export default function SheetTemplateDialog({
       if (kind === 'model') {
         if (file.size > 30 * 1024 * 1024)
           throw Error('Escolha um arquivo de modelo com até 30 MB.');
-        const imported = decodeSheetTemplate(await file.text());
+        const decoded = decodeSheetTemplateFile(await file.text());
+        const imported = decoded.template;
         if (task.signal.aborted) return;
         const nameKey = (name: string) =>
           name.normalize('NFC').toLocaleLowerCase('pt-BR');
@@ -399,11 +435,22 @@ export default function SheetTemplateDialog({
                 `${imported.name.slice(0, 136)} (importado)`,
               )
             : imported;
-        switchDraft(replacement);
-        if (sameName || sameId)
-          setImportResolution(
-            'Já existe um modelo com esse nome ou ID. Confira o nome sugerido e salve para importar uma cópia independente.',
-          );
+        const resolution =
+          sameName || sameId
+            ? 'Já existe um modelo com esse nome ou ID. Confira o nome sugerido e salve para importar uma cópia independente.'
+            : '';
+        if (decoded.properties.length) {
+          // Nothing reaches the draft until the mapping is confirmed.
+          setPropertyImport({
+            template: replacement,
+            properties: decoded.properties,
+            plan: planSealPropertyImport(project, decoded.properties),
+            resolution,
+          });
+        } else {
+          switchDraft(replacement);
+          if (resolution) setImportResolution(resolution);
+        }
       } else {
         const mask = await importMask(file, task.signal);
         if (task.signal.aborted) return;
@@ -538,7 +585,13 @@ export default function SheetTemplateDialog({
         <div className="template-editor-grid">
           <div className="template-editor-controls">
             <fieldset
-              disabled={reading || !!source || !!activeApplication || removing}
+              disabled={
+                reading ||
+                !!source ||
+                !!activeApplication ||
+                removing ||
+                !!propertyImport
+              }
             >
               <legend>Biblioteca do projeto</legend>
               <label className="template-field">
@@ -604,7 +657,13 @@ export default function SheetTemplateDialog({
               </div>
             </fieldset>
             <fieldset
-              disabled={reading || !!source || !!activeApplication || removing}
+              disabled={
+                reading ||
+                !!source ||
+                !!activeApplication ||
+                removing ||
+                !!propertyImport
+              }
             >
               <legend>Dados do modelo</legend>
               <label className="template-field">
@@ -637,28 +696,82 @@ export default function SheetTemplateDialog({
                 </button>
               </div>
             </fieldset>
-            {!reading && !source && !activeApplication && !removing && (
-              <>
-                <TemplatePaperFields
-                  template={draft}
-                  setTemplate={edit}
-                  onChooseArea={() => {
-                    setAreaPoints([]);
-                    clearFeedback();
-                  }}
-                />
-                <TemplateArtworkFields
-                  key={draft.id}
-                  template={draft}
-                  setTemplate={edit}
-                />
-              </>
-            )}
+            <TemplateSourcePanel
+              project={project}
+              saved={saved}
+              selected={selected}
+              disabled={
+                reading ||
+                !!source ||
+                !!activeApplication ||
+                removing ||
+                !!propertyImport
+              }
+              commit={commit}
+              report={report}
+              onLinked={(template) => switchDraft(template)}
+            />
+            {!reading &&
+              !source &&
+              !activeApplication &&
+              !removing &&
+              !propertyImport && (
+                <>
+                  <TemplatePaperFields
+                    template={draft}
+                    setTemplate={edit}
+                    onChooseArea={() => {
+                      setAreaPoints([]);
+                      clearFeedback();
+                    }}
+                  />
+                  <TemplateArtworkFields
+                    key={draft.id}
+                    template={draft}
+                    setTemplate={edit}
+                    properties={availableProperties}
+                  />
+                </>
+              )}
           </div>
           <div
             className={`template-preview-column${!source && !activeApplication ? ' editor-preview' : ''}`}
           >
-            {source ? (
+            {propertyImport ? (
+              <SealPropertyImportPanel
+                plan={propertyImport.plan}
+                locals={project.sealPropertyDefinitions ?? []}
+                onCancel={() => {
+                  setPropertyImport(undefined);
+                  clearFeedback();
+                }}
+                onConfirm={(
+                  decisions: Map<string, SealPropertyImportDecision>,
+                ) => {
+                  try {
+                    const result = resolveSealPropertyImport(
+                      project,
+                      propertyImport.template,
+                      propertyImport.properties,
+                      decisions,
+                      uid,
+                    );
+                    switchDraft(result.template);
+                    setPendingProperties(result);
+                    setImportResolution(
+                      [
+                        propertyImport.resolution,
+                        'Mapeamento das propriedades confirmado. Salve o modelo para gravar o modelo e as propriedades em uma única etapa.',
+                      ]
+                        .filter(Boolean)
+                        .join(' '),
+                    );
+                  } catch (cause) {
+                    report(cause);
+                  }
+                }}
+              />
+            ) : source ? (
               <SheetTemplateCalibration
                 source={source}
                 paper={paper}

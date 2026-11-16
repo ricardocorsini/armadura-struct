@@ -199,6 +199,8 @@ export type SheetSteelSchedule = {
 export type Sheet = {
   sealProperties?: import('./sealFieldSchema').SheetSealProperties;
   sealBindings?: import('./sealFieldSchema').SheetSealBinding[];
+  /** Sheet values of custom properties (format 41); absence inherits. */
+  sealPropertyValues?: import('./sealProperties').SealPropertyValueEntry[];
   /** Revision incorporated when a template is applied explicitly. */
   paperTemplate?: import('./sheetTemplates').SheetTemplate;
   /** One live schedule per sheet, independent of drawing scales and physical steel. */
@@ -339,8 +341,16 @@ export type Project = {
     | 'armadurastruct/35'
     | 'armadurastruct/37'
     | typeof import('./sheetTemplates').SHEET_TEMPLATE_PROJECT_SCHEMA
-    | typeof import('./sealFieldSchema').SEAL_PROJECT_SCHEMA;
+    | typeof import('./sealFieldSchema').SEAL_PROJECT_SCHEMA
+    | typeof import('./sealFieldSchema').CUSTOM_SEAL_PROJECT_SCHEMA
+    | typeof import('./sealFieldSchema').TEMPLATE_SOURCE_PROJECT_SCHEMA;
+  /** Linked external template sources: identity, accepted hash and base (format 42). */
+  sheetTemplateSources?: import('./sheetTemplateSources').TemplateSource[];
   sealProperties?: import('./sealFieldSchema').ProjectSealProperties;
+  /** Custom seal property definitions, identified by stable IDs (format 41). */
+  sealPropertyDefinitions?: import('./sealProperties').SealPropertyDefinition[];
+  /** Project values of custom properties; absence falls back to the default. */
+  sealPropertyValues?: import('./sealProperties').SealPropertyValueEntry[];
   /** Relative file names for display. The session's folder binding grants access. */
   linkedFiles?: string[];
   sheetTemplates?: import('./sheetTemplates').SheetTemplate[];

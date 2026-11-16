@@ -20,6 +20,40 @@ import { NumberField, TextField } from './Panels';
 import { SheetPaperFields, ViewPaperFields } from './PaperFields';
 import { composeSheet } from '../domain/paper';
 import { detachSheetTemplate } from '../domain/sheetTemplates';
+import { useSyncExternalStore } from 'react';
+import {
+  sourceState,
+  sourceStateLabels,
+  templateSource,
+} from '../domain/sheetTemplateSources';
+import {
+  sourceCheck,
+  sourceChecksVersion,
+  subscribeSourceChecks,
+} from '../lib/templateSourceAccess';
+
+/** Link status of the active sheet; the copy is always what is drawn. */
+function SheetSourceStatus({
+  project,
+  sheetId,
+}: {
+  project: Project;
+  sheetId: string;
+}) {
+  useSyncExternalStore(subscribeSourceChecks, sourceChecksVersion);
+  const template = project.sheets.find((s) => s.id === sheetId)?.paperTemplate;
+  const link = template?.sourceLink;
+  const source = link && templateSource(project, link.id);
+  if (!template || !link || !source) return null;
+  return (
+    <p className="field-help" role="status">
+      Modelo vinculado: {template.name} rev. {template.revision}
+      {source.hint ? ` · origem ${source.hint}` : ''} ·{' '}
+      {sourceStateLabels[sourceState(source, link, sourceCheck(link.id))]}.
+      Verifique e atualize em Modelos de margem e selo.
+    </p>
+  );
+}
 
 const SheetSealDraftDialog = lazy(() => import('./SheetSealDraftDialog'));
 
@@ -100,6 +134,7 @@ export default function SheetManager({
             Dados do selo
           </button>
         )}
+        {sheet && <SheetSourceStatus project={p} sheetId={sheet.id} />}
         {sealDraftOpen && sheet && !locked && (
           <Suspense
             fallback={
