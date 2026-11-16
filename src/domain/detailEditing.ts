@@ -177,6 +177,8 @@ export function assertDetailEdit(
     'sheets',
     'sheetTemplates',
     'sealProperties',
+    'sealPropertyDefinitions',
+    'sealPropertyValues',
     'scheduleLock',
     'layers',
     'linkedFiles',

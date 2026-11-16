@@ -4,6 +4,7 @@ import { composeSheet } from '../domain/paper';
 import {
   applySealBatch,
   sameSealTemplate,
+  sealFieldStaticText,
   type SealBatchEdit,
 } from '../domain/sealProject';
 import type { SealPatch } from '../domain/sealFieldEdits';
@@ -11,7 +12,19 @@ import {
   type ProjectSealProperties,
   type SealFieldSource,
   type SheetSealProperties,
+  type TemplateSealBinding,
 } from '../domain/sealFieldSchema';
+import type { ComposedSealField } from '../domain/sheetSealComposition';
+import SealPropertyFields, {
+  initialPropertyDraft,
+  propertyValuePatches,
+} from './SealPropertyFields';
+import {
+  SealAffixFields,
+  SealBindingOptions,
+  sealBindingFromToken,
+  sealBindingToken,
+} from './SealBindingFields';
 import { sealFieldCatalog, type SealFieldId } from '../domain/sealFields';
 import type { Project } from '../domain/types';
 import SheetTemplatePreview from './SheetTemplatePreview';
@@ -44,6 +57,10 @@ type SheetMode = 'keep' | 'inherit' | 'local' | 'empty';
 type SheetEdit = { mode: SheetMode; value?: string };
 type FieldEdit = {
   token: string;
+  /** Definition kept by the template: data source plus literal affixes. */
+  binding?: TemplateSealBinding;
+  /** "Voltar a texto": literal fixed as static text. */
+  staticText?: string;
   definitionEdited?: boolean;
   sourceEdited?: boolean;
   manualEdited?: boolean;
@@ -58,6 +75,18 @@ const sourceLabels = {
   aggregate: 'Agregado da folha',
   manual: 'Texto manual',
 } as const;
+
+/** Visible state of a composed field. */
+function fieldState(field: ComposedSealField) {
+  if (field.invalid) return 'inválido';
+  if (field.source?.kind === 'manual') return 'manual';
+  if (field.explicitEmpty) return 'vazio explícito';
+  if (field.origin === 'sheet') return 'local da folha';
+  if (field.inherited) return 'herdado';
+  if (field.origin === 'default') return 'padrão da definição';
+  if (field.origin === 'project') return 'do projeto';
+  return 'automático';
+}
 
 function sheetProperties(edits: Partial<Record<SheetProperty, SheetEdit>>) {
   const patch: SealPatch<SheetSealProperties> = {};
@@ -104,6 +133,15 @@ export default function SheetSealDraftDialog({
     [],
   );
   const [error, setError] = useState('');
+  const [propertyDraft, setPropertyDraft] = useState(() =>
+    initialPropertyDraft(project),
+  );
+  /** Pending "Voltar a texto" confirmation for one field. */
+  const [freezing, setFreezing] = useState<{
+    fieldId: string;
+    text: string;
+    blocked?: string;
+  }>();
   const template = base.sheets.find(
     (sheet) => sheet.id === initialSheetId,
   )?.paperTemplate;
@@ -133,7 +171,8 @@ export default function SheetSealDraftDialog({
       );
     return (
       fieldEdits.get(field.id) ?? {
-        token: field.sealBinding?.field ?? '',
+        token: sealBindingToken(field.sealBinding),
+        binding: field.sealBinding,
         source: local?.source,
         manualText: local?.manualText,
       }
@@ -169,7 +208,25 @@ export default function SheetSealDraftDialog({
   };
 
   const buildDraft = () => {
+    const values = propertyValuePatches(propertyDraft);
+    const propertiesChanged =
+      JSON.stringify(propertyDraft.definitions) !==
+        JSON.stringify(base.sealPropertyDefinitions ?? []) ||
+      propertyDraft.remaps.size > 0;
     const edits: SealBatchEdit = {
+      ...(propertiesChanged
+        ? {
+            properties: {
+              definitions: propertyDraft.definitions,
+              remaps: [...propertyDraft.remaps].map(([from, to]) => ({
+                from,
+                to,
+              })),
+            },
+          }
+        : {}),
+      projectPropertyValues: values.project,
+      sheetPropertyValues: values.sheet,
       sheetIds: sheets.map((sheet) => sheet.id),
       name: documentName,
       author,
@@ -184,8 +241,9 @@ export default function SheetSealDraftDialog({
       template,
       fields: [...fieldEdits].map(([fieldId, edit]) => ({
         fieldId,
-        ...(edit.definitionEdited
-          ? { definition: edit.token ? { field: edit.token } : null }
+        ...(edit.definitionEdited ? { definition: edit.binding ?? null } : {}),
+        ...(edit.staticText !== undefined
+          ? { staticText: edit.staticText }
           : {}),
         ...(edit.sourceEdited ? { source: edit.source ?? null } : {}),
         ...(edit.manualEdited ? { manualText: edit.manualText ?? null } : {}),
@@ -228,6 +286,36 @@ export default function SheetSealDraftDialog({
     }
   };
 
+  const propertySources = (id: string): SealFieldSource['kind'][] => {
+    const scope = propertyDraft.definitions.find(
+      (item) => item.id === id,
+    )?.scope;
+    return scope === 'project'
+      ? ['project']
+      : scope === 'sheet'
+        ? ['sheet']
+        : scope
+          ? ['sheet', 'project']
+          : [];
+  };
+  const startFreeze = (fieldId: string) => {
+    setError('');
+    try {
+      const draft = buildDraft();
+      setFreezing({
+        fieldId,
+        text: sealFieldStaticText(draft, initialSheetId, fieldId),
+      });
+    } catch (failure) {
+      setFreezing({
+        fieldId,
+        text: '',
+        blocked:
+          (failure instanceof Error ? failure.message : String(failure)) +
+          ' Para fixar mesmo assim, informe explicitamente o texto manual.',
+      });
+    }
+  };
   const revisionValues = new Set(
     sheets.map((sheet) => sheet.properties.revision),
   );
@@ -371,6 +459,15 @@ export default function SheetSealDraftDialog({
                   })}
                 </div>
               </fieldset>
+              <SealPropertyFields
+                base={base}
+                sheets={sheets}
+                draft={propertyDraft}
+                onChange={(next) => {
+                  setPropertyDraft(next);
+                  invalidate();
+                }}
+              />
               <fieldset>
                 <legend>Vínculos do modelo aplicado</legend>
                 {!template?.fields.length && (
@@ -397,35 +494,52 @@ export default function SheetSealDraftDialog({
                         {'Vínculo de ' + field.label}
                         <select
                           value={edit.token}
+                          disabled={edit.staticText !== undefined}
                           onChange={(event) => {
-                            const token = event.target.value as
-                              | SealFieldId
-                              | '';
+                            const token = event.target.value;
                             updateField(field.id, {
                               ...edit,
                               token,
+                              binding: sealBindingFromToken(
+                                token,
+                                edit.binding,
+                              ),
                               definitionEdited: true,
                               source: undefined,
                               sourceEdited: true,
                             });
                           }}
                         >
-                          <option value="">Texto estático</option>
-                          {edit.token &&
-                            !Object.hasOwn(sealFieldCatalog, edit.token) && (
-                              <option value={edit.token}>
-                                {edit.token} (desconhecido)
-                              </option>
-                            )}
-                          {Object.entries(sealFieldCatalog).map(
-                            ([token, item]) => (
-                              <option key={token} value={token}>
-                                {item.label + ' (' + token + ')'}
-                              </option>
-                            ),
-                          )}
+                          <SealBindingOptions
+                            token={edit.token}
+                            properties={propertyDraft.definitions}
+                          />
                         </select>
                       </label>
+                      {edit.staticText !== undefined && (
+                        <p className="template-hint" role="status">
+                          {'Voltará a texto fixo: “' + edit.staticText + '”. '}
+                          <button
+                            type="button"
+                            onClick={() => updateField(field.id, undefined)}
+                          >
+                            {'Manter vínculo de ' + field.label}
+                          </button>
+                        </p>
+                      )}
+                      {!!edit.token && edit.binding && (
+                        <SealAffixFields
+                          label={field.label}
+                          binding={edit.binding}
+                          onChange={(binding) =>
+                            updateField(field.id, {
+                              ...edit,
+                              binding,
+                              definitionEdited: true,
+                            })
+                          }
+                        />
+                      )}
                       {!!edit.token && (
                         <label className="template-field">
                           {'Origem de ' + field.label}
@@ -458,9 +572,10 @@ export default function SheetSealDraftDialog({
                                 Valores mistos (manter)
                               </option>
                             )}
-                            {(
-                              sealFieldCatalog[edit.token as SealFieldId]
-                                ?.sources ?? []
+                            {(edit.binding?.property !== undefined
+                              ? propertySources(edit.binding.property)
+                              : (sealFieldCatalog[edit.token as SealFieldId]
+                                  ?.sources ?? [])
                             ).map((kind) => (
                               <option
                                 key={kind}
@@ -544,6 +659,69 @@ export default function SheetSealDraftDialog({
                           preservados até editar cada opção.
                         </small>
                       )}
+                      {!!edit.token &&
+                        edit.staticText === undefined &&
+                        freezing?.fieldId !== field.id && (
+                          <button
+                            type="button"
+                            onClick={() => startFreeze(field.id)}
+                          >
+                            {'Voltar a texto: ' + field.label}
+                          </button>
+                        )}
+                      {freezing?.fieldId === field.id && (
+                        <div className="template-fields" role="group">
+                          {freezing.blocked ? (
+                            <p className="template-alert" role="alert">
+                              {freezing.blocked}
+                            </p>
+                          ) : (
+                            <p className="template-hint" role="status">
+                              {'Será fixado como texto: “' +
+                                freezing.text +
+                                '”. A partir da confirmação o campo deixa de atualizar.'}
+                            </p>
+                          )}
+                          {freezing.blocked && (
+                            <label className="template-field">
+                              {'Texto manual a fixar em ' + field.label}
+                              <input
+                                value={freezing.text}
+                                maxLength={500}
+                                onChange={(event) =>
+                                  setFreezing({
+                                    ...freezing,
+                                    text: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                          )}
+                          <div className="template-buttons">
+                            <button
+                              type="button"
+                              onClick={() => setFreezing(undefined)}
+                            >
+                              Cancelar volta a texto
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!!freezing.blocked && !freezing.text}
+                              onClick={() => {
+                                updateField(field.id, {
+                                  token: '',
+                                  binding: undefined,
+                                  definitionEdited: true,
+                                  staticText: freezing.text,
+                                });
+                                setFreezing(undefined);
+                              }}
+                            >
+                              {'Confirmar volta a texto de ' + field.label}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -589,7 +767,7 @@ export default function SheetSealDraftDialog({
                             (field.source
                               ? sourceLabels[field.source.kind]
                               : 'Origem indisponível')}
-                          {field.inherited && ' (herdado)'}
+                          {' · ' + fieldState(field)}
                           {!field.text && ' · Sem valor'}
                         </li>
                       ))}

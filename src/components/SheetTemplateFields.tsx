@@ -8,7 +8,13 @@ import { LINE_TYPES } from '../domain/layers';
 import { sheetSize } from '../domain/paperFormat';
 import { DEFAULT_TEXT_FONT } from '../domain/textStyle';
 import { fieldFromImportedText } from '../domain/sheetTemplates';
-import { sealFieldCatalog } from '../domain/sealFields';
+import type { SealPropertyDefinition } from '../domain/sealProperties';
+import {
+  SealAffixFields,
+  SealBindingOptions,
+  sealBindingFromToken,
+  sealBindingToken,
+} from './SealBindingFields';
 import {
   uid,
   type DrawingStyle,
@@ -343,9 +349,11 @@ function VertexEditor({
 
 function FieldEditor({
   field,
+  properties,
   onChange,
 }: {
   field: SheetTemplateField;
+  properties: readonly SealPropertyDefinition[];
   onChange: (field: SheetTemplateField) => void;
 }) {
   const change = (patch: Partial<SheetTemplateField>) =>
@@ -376,29 +384,29 @@ function FieldEditor({
       <label className="template-field">
         <span>Campo automático do selo</span>
         <select
-          value={field.sealBinding?.field ?? ''}
+          value={sealBindingToken(field.sealBinding)}
           onChange={(event) =>
             change({
-              sealBinding: event.target.value
-                ? { field: event.target.value }
-                : undefined,
+              sealBinding: sealBindingFromToken(
+                event.target.value,
+                field.sealBinding,
+              ),
             })
           }
         >
-          <option value="">Texto estático</option>
-          {field.sealBinding &&
-            !Object.hasOwn(sealFieldCatalog, field.sealBinding.field) && (
-              <option value={field.sealBinding.field}>
-                {field.sealBinding.field} (desconhecido)
-              </option>
-            )}
-          {Object.entries(sealFieldCatalog).map(([token, item]) => (
-            <option key={token} value={token}>
-              {item.label + ' (' + token + ')'}
-            </option>
-          ))}
+          <SealBindingOptions
+            token={sealBindingToken(field.sealBinding)}
+            properties={properties}
+          />
         </select>
       </label>
+      {field.sealBinding && (
+        <SealAffixFields
+          label={field.label}
+          binding={field.sealBinding}
+          onChange={(sealBinding) => change({ sealBinding })}
+        />
+      )}
       <PointFields
         label="Inserção do texto"
         value={field.origin}
@@ -452,9 +460,11 @@ function FieldEditor({
 export function TemplateArtworkFields({
   template,
   setTemplate,
+  properties = [],
 }: {
   template: SheetTemplate;
   setTemplate: (next: SheetTemplate) => void;
+  properties?: readonly SealPropertyDefinition[];
 }) {
   const [shapeIndex, setShapeIndex] = useState(0);
   const [fieldId, setFieldId] = useState('');
@@ -683,7 +693,12 @@ export function TemplateArtworkFields({
                 ))}
               </select>
             </label>
-            <FieldEditor key={field.id} field={field} onChange={fieldChanges} />
+            <FieldEditor
+              key={field.id}
+              field={field}
+              properties={properties}
+              onChange={fieldChanges}
+            />
             <button
               type="button"
               onClick={() =>

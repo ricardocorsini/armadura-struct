@@ -5,6 +5,7 @@ import {
 } from './drawingMetadata';
 import type { Project, Sheet } from './types';
 import { scaleLabel } from './paperFormat';
+import { resolveSealProperty, type SealPropertyOrigin } from './sealProperties';
 import type {
   ProjectSealProperties,
   SealFieldSource,
@@ -67,11 +68,25 @@ type SealFieldData = {
 };
 
 export type SealFieldBinding = {
-  field: string;
+  /** Native catalog token. Absent when the field uses a custom property. */
+  field?: string;
+  /** Custom property ID (AS-14). */
+  property?: string;
   source?: SealFieldSource;
   /** Absence uses the automatic source. An empty string is an explicit override. */
   manualText?: string;
+  /** Literal text kept apart from the typed value. */
+  prefix?: string;
+  suffix?: string;
 };
+
+/** Literal prefix/suffix around a non-empty value; an empty value stays empty. */
+export function withSealAffixes(
+  binding: Pick<SealFieldBinding, 'prefix' | 'suffix'>,
+  text: string,
+): string {
+  return text ? (binding.prefix ?? '') + text + (binding.suffix ?? '') : text;
+}
 
 /** A portable field acquires its drawing and manual overrides only in a sheet. */
 export function sealBindingForField(
@@ -90,7 +105,12 @@ export function sealBindingForField(
     local?.source ??
     (definition.source ? { kind: definition.source } : undefined);
   return {
-    field: definition.field,
+    ...(definition.field === undefined ? {} : { field: definition.field }),
+    ...(definition.property === undefined
+      ? {}
+      : { property: definition.property }),
+    ...(definition.prefix ? { prefix: definition.prefix } : {}),
+    ...(definition.suffix ? { suffix: definition.suffix } : {}),
     ...(source === undefined ? {} : { source }),
     ...(local?.manualText === undefined
       ? {}
@@ -99,6 +119,7 @@ export function sealBindingForField(
 }
 
 type SealFieldDiagnostic =
+  | 'invalid-value'
   | 'unknown-field'
   | 'unsupported-source'
   | 'missing-source'
@@ -112,6 +133,9 @@ type SealFieldValue = { text: string; diagnostics: SealFieldDiagnostic[] };
 export type ResolvedSealField = SealFieldValue & {
   source?: SealFieldSource | { kind: 'manual' };
   inherited?: true;
+  /** Custom properties: where the value came from. */
+  origin?: SealPropertyOrigin;
+  explicitEmpty?: true;
 };
 
 function isProjectPropertyField(
@@ -272,7 +296,43 @@ export function resolveSealField(
   const index = project.sheets.findIndex((sheet) => sheet.id === sheetId);
   if (index === -1)
     return { ...value('', 'missing-source'), source: binding.source };
-  if (!Object.hasOwn(sealFieldCatalog, binding.field))
+  if (binding.property !== undefined) {
+    if (binding.manualText !== undefined)
+      return { ...value(binding.manualText), source: { kind: 'manual' } };
+    const kind = binding.source?.kind;
+    if (kind !== undefined && kind !== 'project' && kind !== 'sheet')
+      return { ...value('', 'unsupported-source'), source: binding.source };
+    const resolved = resolveSealProperty(
+      project,
+      project.sheets[index],
+      binding.property,
+      kind,
+    );
+    const diagnostics: SealFieldDiagnostic[] = resolved.missing
+      ? ['missing-source']
+      : resolved.unsupported
+        ? ['unsupported-source']
+        : resolved.invalid
+          ? ['invalid-value']
+          : [];
+    const origin =
+      resolved.origin === 'project' || resolved.origin === 'default'
+        ? ({ kind: 'project' } as const)
+        : ({ kind: 'sheet' } as const);
+    return {
+      ...value(resolved.text, ...diagnostics),
+      source: binding.source ?? origin,
+      origin: resolved.origin,
+      ...(resolved.explicitEmpty ? { explicitEmpty: true as const } : {}),
+      ...(resolved.origin === 'project' && kind !== 'project'
+        ? { inherited: true as const }
+        : {}),
+    };
+  }
+  if (
+    binding.field === undefined ||
+    !Object.hasOwn(sealFieldCatalog, binding.field)
+  )
     return { ...value('', 'unknown-field'), source: binding.source };
 
   const field = binding.field as SealFieldId;

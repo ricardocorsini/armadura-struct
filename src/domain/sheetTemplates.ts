@@ -7,8 +7,17 @@ import { sheetSize } from './paperFormat';
 import { validateTextContent } from './textStyle';
 import { uid, type Mask, type Point, type Project, type Sheet } from './types';
 import {
+  assertTemplatePropertyReferences,
+  SEAL_PROPERTY_LIMITS,
+  sealPropertyDefinitionSchema,
+  sealPropertyDefinitionsSchema,
+  templatePropertyDefinitions,
+  type SealPropertyDefinition,
+} from './sealProperties';
+import {
+  hasCustomSealData,
   hasSealData,
-  SEAL_PROJECT_SCHEMA,
+  isSealProjectSchema,
   templateSealBindingSchema,
   withSealDataVersion,
 } from './sealFieldSchema';
@@ -17,6 +26,8 @@ import {
 export const SHEET_TEMPLATE_PROJECT_SCHEMA = 'armadurastruct/38' as const;
 const catalogVersion = 'armadurastruct.sheet-template/1';
 const linkedCatalogVersion = 'armadurastruct.sheet-template/2';
+/** Version 3 carries custom property definitions (IDs, types, defaults, rules). */
+const propertyCatalogVersion = 'armadurastruct.sheet-template/3';
 const num = z.number().finite();
 const id = z.string().min(1).max(200);
 const point = z.object({ x: num, y: num });
@@ -319,6 +330,7 @@ export function saveSheetTemplate(
     ...draft,
     revision: existing?.revision ?? draft.revision,
   });
+  assertTemplatePropertyReferences(project, next);
   if (
     list.some((t) => t.id !== next.id && nameKey(t.name) === nameKey(next.name))
   )
@@ -336,10 +348,9 @@ export function saveSheetTemplate(
     throw Error('O catálogo admite até 1.000 modelos.');
   return withSealDataVersion({
     ...project,
-    schema:
-      project.schema === SEAL_PROJECT_SCHEMA
-        ? SEAL_PROJECT_SCHEMA
-        : SHEET_TEMPLATE_PROJECT_SCHEMA,
+    schema: isSealProjectSchema(project.schema)
+      ? project.schema
+      : SHEET_TEMPLATE_PROJECT_SCHEMA,
     sheetTemplates: existing
       ? list.map((t) =>
           t.id === next.id ? { ...next, revision: t.revision + 1 } : t,
@@ -420,22 +431,39 @@ export function applySheetTemplate(
   return changed
     ? withSealDataVersion({
         ...project,
-        schema:
-          project.schema === SEAL_PROJECT_SCHEMA
-            ? SEAL_PROJECT_SCHEMA
-            : SHEET_TEMPLATE_PROJECT_SCHEMA,
+        schema: isSealProjectSchema(project.schema)
+          ? project.schema
+          : SHEET_TEMPLATE_PROJECT_SCHEMA,
         sheets,
       })
     : project;
 }
 
-export function encodeSheetTemplate(template: SheetTemplate) {
+/**
+ * The file carries the definitions its fields reference. Project and sheet
+ * values, aliases and manual overrides stay in the source project.
+ */
+export function encodeSheetTemplate(
+  template: SheetTemplate,
+  project: Pick<Project, 'sealPropertyDefinitions'> = {},
+) {
+  const validated = validateSheetTemplate(template);
+  const properties = templatePropertyDefinitions(project, validated);
+  const custom = hasCustomSealData({ sheetTemplates: [validated] });
+  if (custom)
+    assertTemplatePropertyReferences(
+      { sealPropertyDefinitions: properties } as Project,
+      validated,
+    );
   return JSON.stringify(
     {
-      schema: hasSealData({ sheetTemplates: [template] })
-        ? linkedCatalogVersion
-        : catalogVersion,
-      template: validateSheetTemplate(template),
+      schema: custom
+        ? propertyCatalogVersion
+        : hasSealData({ sheetTemplates: [validated] })
+          ? linkedCatalogVersion
+          : catalogVersion,
+      template: validated,
+      ...(custom ? { properties } : {}),
     },
     null,
     2,
@@ -443,7 +471,26 @@ export function encodeSheetTemplate(template: SheetTemplate) {
 }
 
 export function decodeSheetTemplate(raw: string): SheetTemplate {
+  return decodeSheetTemplateFile(raw).template;
+}
+
+export function decodeSheetTemplateFile(raw: string): {
+  template: SheetTemplate;
+  properties: SealPropertyDefinition[];
+} {
   const data: unknown = JSON.parse(raw);
+  if (
+    data &&
+    typeof data === 'object' &&
+    'schema' in data &&
+    data.schema !== propertyCatalogVersion &&
+    (('template' in data &&
+      hasCustomSealData({ sheetTemplates: [data.template] })) ||
+      'properties' in data)
+  )
+    throw Error(
+      'Propriedades personalizadas exigem modelo de prancha versão 3.',
+    );
   if (
     data &&
     typeof data === 'object' &&
@@ -455,11 +502,32 @@ export function decodeSheetTemplate(raw: string): SheetTemplate {
     throw Error('Vínculos de selo exigem modelo de prancha versão 2.');
   const payload = z
     .object({
-      schema: z.enum([catalogVersion, linkedCatalogVersion]),
+      schema: z.enum([
+        catalogVersion,
+        linkedCatalogVersion,
+        propertyCatalogVersion,
+      ]),
       template: sheetTemplateSchema,
+      properties: z
+        .array(sealPropertyDefinitionSchema)
+        .max(SEAL_PROPERTY_LIMITS.definitions)
+        .optional(),
     })
     .parse(data);
-  return validateSheetTemplate(payload.template);
+  const template = validateSheetTemplate(payload.template);
+  const properties = (payload.properties ?? []).map(
+    ({ aliases: _aliases, ...item }) => item,
+  );
+  const parsed = sealPropertyDefinitionsSchema.safeParse(properties);
+  if (!parsed.success)
+    throw Error(
+      'Propriedade do modelo inválida. ' + parsed.error.issues[0].message,
+    );
+  assertTemplatePropertyReferences(
+    { sealPropertyDefinitions: parsed.data } as Project,
+    template,
+  );
+  return { template, properties: parsed.data };
 }
 
 /** Geometry and text heights enter in normalized millimeters from the existing importer. */

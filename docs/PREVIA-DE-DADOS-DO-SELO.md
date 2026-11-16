@@ -8,7 +8,7 @@ Em **Pranchas**, abra uma folha com um modelo aplicado e escolha **Dados do selo
 2. Informe nome, autor e os dados documentais do projeto: obra, código, endereço, cliente, responsável e data civil, sem horário.
 3. Nas propriedades das folhas, **Manter como está** preserva cada valor. **Herdar do projeto** acompanha o cadastro global; **Valor local** fixa um valor na folha; **Vazio explícito** mantém o campo vazio. Revisões locais não alteram as outras folhas. Valores mistos são indicados e não são gravados como texto.
 4. Associe explicitamente os campos do modelo ao catálogo, como **Autor (@AUTOR)** ou **Endereço (@ENDERECO)**. Textos com @ continuam literais até essa associação. Alterações de definição criam uma revisão na biblioteca e aplicam essa revisão apenas às folhas selecionadas com o mesmo modelo incorporado. Uma revisão mais recente na biblioteca precisa ser aplicada antes de editar os vínculos de uma revisão antiga.
-5. Use **Conferir prévia** para ver os textos, suas origens e os diagnósticos. Confirme com **Aplicar dados do selo**. Só as propriedades e as opções de vínculo editadas são alteradas; origens e textos manuais diferentes nas demais folhas são preservados.
+5. Para dados próprios do escritório (unidade, fase, carga…), cadastre [propriedades personalizadas](PROPRIEDADES-PERSONALIZADAS-DO-SELO.md) na mesma janela. Use **Conferir prévia** para ver os textos, suas origens e os diagnósticos. Confirme com **Aplicar dados do selo**. Só as propriedades e as opções de vínculo editadas são alteradas; origens e textos manuais diferentes nas demais folhas são preservados.
 
 A tela da prancha e os exportadores PDF/DXF leem automaticamente os vínculos salvos, usando a mesma composição. Não é preciso reabrir a janela para atualizar o selo.
 

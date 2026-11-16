@@ -2,6 +2,8 @@
 
 ## Não lançado
 
+- Propriedades personalizadas do selo (#143, AS-14): definições com ID estável, tipo (texto, número, data civil, sim/não), escopo, padrão e regras; valores do projeto e da folha com herança e vazio explícito; textos do carimbo vinculados por ID com prefixo/sufixo literais e **Voltar a texto**. Alterar tipo ou excluir em uso mostra o impacto sem converter ou apagar dados; modelos exportados (versão 3) carregam as definições sem valores locais, com mapeamento explícito na importação. Tela/PDF/DXF pela mesma composição, sem efeito físico. Formato nativo /41 (o /40 fica reservado à #145). [Uso e compatibilidade](docs/PROPRIEDADES-PERSONALIZADAS-DO-SELO.md).
+
 - Preenchimento automático dos selos (#142): cadastro documental, herança, vínculos por ID e substituições manuais persistidos no formato /39; aplicação em lote com histórico atômico; tela/PDF/DXF pela mesma composição; conversão explícita de textos CAD e modelos portáteis /2. [Uso e compatibilidade](docs/PREVIA-DE-DADOS-DO-SELO.md).
 
 - Arquivo → Projeto → Fechar projeto (#173): volta a uma tela inicial **Sem projeto aberto** sem encerrar o aplicativo, com Novo, Abrir e Recentes. Alterações não salvas pedem Salvar e fechar, Fechar sem salvar ou Cancelar, reaproveitando as proteções de Projetos recentes (download no navegador não conta como gravação). Reiniciar após fechar mantém a tela inicial; a recuperação do último trabalho continua quando o aplicativo é encerrado com projeto aberto. Nenhum arquivo, pasta, backup ou recente é apagado; formato do projeto inalterado. [Uso e limites](docs/FECHAR-PROJETO.md).
