@@ -2,6 +2,10 @@
 
 ## Não lançado
 
+## 0.7.0 · 2026-11-16
+
+Reúne as mudanças integradas à master desde a 0.6.1. [Notas de publicação](.github/release-notes/v0.7.0.md), usadas também no manifesto assinado dos instaladores.
+
 - Séries variáveis e tabela de comprimentos individuais (#145, AS-77): entidade física de série com variantes que são armaduras reais (IDs estáveis, estação, estado exato/estimado, origem e total declarado), consulta determinística compartilhada pela RA, tabela e saídas, agrupamento só por regras de fabricação, tabela na prancha com prévia, ocultar/mostrar, blocos/continuações, subtotais e total da série, PDF/DXF de pranchas e lista por variante no CSV por escopo. Registros exatos por variante para adaptadores de fabricação, com bloqueio de estimativas. Formato nativo /40 para séries e /43 para a composição com máscaras independentes /41 (sem ocupar /42, reservado à PR #218), com leitura dos contratos anteriores sem conversão implícita; pacote de detalhamento inalterado e recusa explícita de séries. [Uso, convenções e limites](docs/TABELA-DE-COMPRIMENTOS-VARIAVEIS.md).
 
 - Barra livre por comprimento na direção do cursor (#211): digitação em mm pela linha de comando, alternando com cliques e coordenadas na mesma barra; direção efetiva da prévia com ORTO, distância sem novo encaixe, avisos que conservam o rascunho e histórico da barra inteira. Formato e cálculos físicos existentes preservados. [Uso e verificação](docs/BARRA-POR-COMPRIMENTO.md).
