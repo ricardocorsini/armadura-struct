@@ -76,6 +76,11 @@ export type Action =
   | 'detail-repetition'
   | 'fabrication'
   | 'clone-armature'
+  | 'armature-copy'
+  | 'armature-move'
+  | 'armature-rotate'
+  | 'armature-copy-selection'
+  | 'armature-paste-selection'
   | 'layers'
   | 'align-selection'
   | 'insert-vertex'
@@ -147,6 +152,21 @@ const model = { needsDrawing: true };
 const selected = { selection: 1 };
 const individual = { ...selected, blockedForGroup: true };
 const isolated = { blockedInIsolation: true };
+const armatureClipboardKeys = {
+  'armature-copy-selection': 'Mod+C',
+  'armature-paste-selection': 'Mod+V',
+} as const;
+
+export function isArmatureClipboardAction(
+  action: Action,
+): action is keyof typeof armatureClipboardKeys {
+  return Object.hasOwn(armatureClipboardKeys, action);
+}
+
+export function clipboardBindingKey(action: Action, scope: ShortcutScope) {
+  if (scope === 'drawing' && isArmatureClipboardAction(action))
+    return armatureClipboardKeys[action];
+}
 
 export const shortcutCatalog: Record<Action, Command> = {
   new: command('Novo projeto', general, {}, isolated),
@@ -457,6 +477,52 @@ export const shortcutCatalog: Record<Action, Command> = {
     global(['DUPLICAR', 'CLONAR', 'DUPLICARARMADURA']),
     selected,
   ),
+  'armature-copy': command(
+    'Copiar armadura',
+    armatures,
+    {},
+    {
+      ...model,
+      ...individual,
+    },
+  ),
+  'armature-move': command(
+    'Mover armadura',
+    armatures,
+    {},
+    {
+      ...model,
+      ...individual,
+    },
+  ),
+  'armature-rotate': command(
+    'Rotacionar armadura',
+    armatures,
+    {},
+    {
+      ...model,
+      ...individual,
+    },
+  ),
+  'armature-copy-selection': command(
+    'Copiar seleção de armaduras',
+    armatures,
+    { drawing: { keys: [armatureClipboardKeys['armature-copy-selection']] } },
+    {
+      ...model,
+      ...individual,
+      description: 'Guarda uma seleção de armaduras com o foco no desenho.',
+    },
+  ),
+  'armature-paste-selection': command(
+    'Colar seleção de armaduras',
+    armatures,
+    { drawing: { keys: [armatureClipboardKeys['armature-paste-selection']] } },
+    {
+      ...model,
+      description: 'Posiciona uma cópia da seleção com o foco no desenho.',
+    },
+  ),
   polyline: command(
     'Polilinha de elementos',
     edit,
@@ -595,7 +661,14 @@ const namedKeys = new Map(
 const modifierOrder = ['Mod', 'Alt', 'Shift'];
 const reservedModKeys = /^(?:[1-9]|A|C|F|H|J|L|N|P|Q|R|T|U|V|W|X|F[2456])$/;
 
-export function normalizeKey(value: string): string | undefined {
+type ClipboardKeys =
+  | boolean
+  | (typeof armatureClipboardKeys)[keyof typeof armatureClipboardKeys];
+
+export function normalizeKey(
+  value: string,
+  clipboardKeys?: ClipboardKeys,
+): string | undefined {
   const parts = value
     .trim()
     .split('+')
@@ -617,8 +690,16 @@ export function normalizeKey(value: string): string | undefined {
     shift = modifiers.includes('Shift');
   if (alt && (mod || /^(?:F[0-9]+|Arrow(?:Left|Right)|Home|Tab)$/i.test(last)))
     return;
+  const normalized = [
+    ...modifierOrder.filter((part) => modifiers.includes(part)),
+    namedKeys.get(last) ?? last,
+  ].join('+');
+  const clipboardAllowed =
+    (normalized === 'Mod+C' || normalized === 'Mod+V') &&
+    (clipboardKeys === true || clipboardKeys === normalized);
   if (
     mod &&
+    !clipboardAllowed &&
     (reservedModKeys.test(last) ||
       (shift && /^[A-Z]$/.test(last) && last !== 'Z'))
   )
@@ -629,10 +710,7 @@ export function normalizeKey(value: string): string | undefined {
     (last === 'F5' || last === 'F6' || last === 'F11' || last === 'F12')
   )
     return;
-  return [
-    ...modifierOrder.filter((part) => modifiers.includes(part)),
-    namedKeys.get(last) ?? last,
-  ].join('+');
+  return normalized;
 }
 
 export function normalizeAlias(value: string): string | undefined {
@@ -657,7 +735,7 @@ export function textComposition(event: KeyboardEvent) {
   );
 }
 
-export function eventKey(event: KeyboardEvent) {
+export function eventKey(event: KeyboardEvent, clipboardKeys?: ClipboardKeys) {
   if (textComposition(event) || (event.ctrlKey && event.metaKey)) return;
   return normalizeKey(
     [
@@ -668,6 +746,7 @@ export function eventKey(event: KeyboardEvent) {
     ]
       .filter(Boolean)
       .join('+'),
+    clipboardKeys,
   );
 }
 
